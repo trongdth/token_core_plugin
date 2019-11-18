@@ -1,5 +1,6 @@
 package com.lhalcyon.tokencoreplugin;
 
+import android.app.Activity;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lhalcyon.tokencore.foundation.utils.MnemonicUtil;
@@ -41,19 +42,30 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
 import io.flutter.plugin.common.MethodChannel.Result;
 import io.flutter.plugin.common.PluginRegistry.Registrar;
 
+import org.consenlabs.tokencore.wallet.Identity;
+import org.consenlabs.tokencore.wallet.KeystoreStorage;
+import org.consenlabs.tokencore.wallet.WalletManager;
+
+import java.io.File;
+
 /**
  * TokenCorePlugin
  */
 public class TokenCorePlugin implements MethodCallHandler {
 
     private ObjectMapper objectMapper = new ObjectMapper();
+    private final Activity activity;
+
+    private TokenCorePlugin(Activity activity) {
+        this.activity = activity;
+    }
 
     /**
      * Plugin registration.
      */
     public static void registerWith(Registrar registrar) {
         final MethodChannel channel = new MethodChannel(registrar.messenger(), "realm.lhalcyon.com/token_core_plugin");
-        channel.setMethodCallHandler(new TokenCorePlugin());
+        channel.setMethodCallHandler(new TokenCorePlugin(registrar.activity()));
     }
 
     @Override
@@ -186,9 +198,20 @@ public class TokenCorePlugin implements MethodCallHandler {
             Object arguments = call.arguments;
             String json = objectMapper.writeValueAsString(arguments);
             ExportArgs args = objectMapper.readValue(json, ExportArgs.class);
-
             ExWallet wallet = mapKeystore2Wallet(args.keystore, args.password);
-            String privateKey = wallet.exportPrivateKey(args.password);
+
+            WalletManager.storage = new KeystoreStorage() {
+                @Override
+                public File getKeystoreDir() {
+                    return activity.getFilesDir();
+                }
+            };
+            WalletManager.scanWallets();
+            String mnemonic = wallet.exportMnemonic(args.password).getMnemonic();
+            Identity identity = Identity.recoverIdentity(mnemonic,null,args.password, args.password,
+                    wallet.getMetadata().getNetwork().getValue(), wallet.getMetadata().getSegWit().getValue());
+
+            String privateKey = WalletManager.exportPrivateKey(identity.getWallets().get(0).getId(), args.password);
             result.success(privateKey);
         } catch (Exception e) {
             e.printStackTrace();
@@ -305,8 +328,8 @@ public class TokenCorePlugin implements MethodCallHandler {
         if (KeystoreUtil.isHDMnemonicKeystore(objectMapper,keystoreJson)) {
             ExHDMnemonicKeystore keystore = objectMapper.readValue(keystoreJson, ExHDMnemonicKeystore.class);
             wallet = new ExWallet(keystore);
-        }
-        if (KeystoreUtil.isV3Keystore(objectMapper,keystoreJson)) {
+
+        } else if (KeystoreUtil.isV3Keystore(objectMapper,keystoreJson)) {
             V3Keystore keystore = objectMapper.readValue(keystoreJson, V3Keystore.class);
             wallet = new ExWallet(keystore);
         }
